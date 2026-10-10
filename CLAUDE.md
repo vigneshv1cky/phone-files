@@ -33,7 +33,6 @@ earlier Python/browser prototype; `PhoneFilesMac/` is the app that ships.
 
 ## Pick up here next time (2026-10-10)
 - Finder → app drag: user reported it doesn't work; ask which view and drop target, then read the "Drop:" notice lines in the log.
-- The phone has a test folder from the write test: Download/Phone Files Test (notes.txt + one photo copy). User hasn't decided whether to delete it.
 
 ## Phone-side requirements
 - USB mode must be "File transfer / Android Auto"; storage is hidden while the screen is locked.
