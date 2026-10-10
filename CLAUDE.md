@@ -26,7 +26,7 @@ earlier Python/browser prototype; `PhoneFilesMac/` is the app that ships.
 - **Quit the installed app before running a test build** (`osascript -e 'quit app "Phone Files"'`), or the test build will (correctly) refuse the phone.
 
 ## Open issues (2026-10-10)
-- A phone→Mac copy right after browsing phone photos in Column view waited >60 s (likely queued behind preview fetches); not yet diagnosed.
+- A phone→Mac copy that waited >60 s did not reproduce once the phone was healthy (same steps: 0.3 s). It happened just before the double-open crash, so the phone was probably already wedged. Watch for it.
 - After a replug a Pixel often falls back to "No data transfer": it still enumerates as MTP (PID 0x4ee1) but hides storage ("Get Storage information failed"). The fix is on the phone: choose File transfer again.
 
 ## Phone-side requirements
