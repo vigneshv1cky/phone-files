@@ -11,13 +11,26 @@ Tested with a Pixel 10 Pro XL on macOS 27; any Android phone in "File transfer" 
 
 ## Features
 
-- Finder-style window: sidebar with the phone, battery level and storage usage; clickable path bar
-- List view (sortable by name, size, date) and thumbnail grid
-- Quick Look preview — press Space or double-click a file
-- Download files or entire folders (folder structure preserved) to Downloads or any location
-- Upload by dragging files or folders into the window, or with the Upload button
-- New folder, delete (always confirmed), transfer progress with cancel
+Works like Finder, pointed at your phone:
+
+- **Four views** — Icons, List, Columns and Gallery (⌘1–⌘4), with ⌘+ / ⌘− / ⌘0 to resize
+  icons, rows and text, and an icon-size slider in Icon view
+- **Preview pane** (⇧⌘P or ⌘I) — live preview of photos, videos, PDFs, audio and text, with kind,
+  size, date, image dimensions and location
+- **Quick Look** — Space (or ⌘Y) toggles the Quick Look panel
+- **Open in Mac apps** — double-click or ⌘↓ opens a file in its default app (a copy; edits stay on the Mac)
+- **Navigation** — Back / Forward (⌘[ ⌘]), Enclosing Folder (⌘↑), clickable path bar, Go menu,
+  and Favorites in the sidebar (DCIM, Download, Pictures, …)
+- **Search** the current folder, sort by name, kind, date or size, keep folders on top,
+  show or hide dot-files (⇧⌘.)
+- **Transfers** — download files or whole folders (⌘D, or Download To…), drag files out to
+  Finder, drag files or folders in, or paste files copied in Finder (⌘V); progress and cancel
+  in the sidebar
+- **Manage** — new folder (⇧⌘N), rename (Return), delete (⌘⌫, always confirmed)
 - Reconnects cleanly after the phone is replugged or its USB mode changes
+
+Large files (over 25 MB) don't load into the preview automatically — the pane shows the
+thumbnail and a *Load Preview* button, so selecting a 2 GB video doesn't start a 2 GB copy.
 
 ## Requirements
 
@@ -66,7 +79,11 @@ The phone answers one request at a time, so browsing waits while a large transfe
 |---|---|
 | `PhoneFilesMac/Sources/PhoneFiles/MTPDevice.swift` | Swift wrapper over libmtp, plus a serial queue that runs every phone call one at a time |
 | `PhoneFilesMac/Sources/PhoneFiles/PhoneModel.swift` | Connection, navigation, thumbnails and transfers |
-| `PhoneFilesMac/Sources/PhoneFiles/Views.swift` | The SwiftUI window |
+| `PhoneFilesMac/Sources/PhoneFiles/ContentView.swift` | Window layout, sidebar, dialogs |
+| `PhoneFilesMac/Sources/PhoneFiles/BrowserView.swift` | Toolbar, path bar, status bar |
+| `PhoneFilesMac/Sources/PhoneFiles/ItemViews.swift` | Icon, List, Column and Gallery views |
+| `PhoneFilesMac/Sources/PhoneFiles/PreviewViews.swift` | Preview pane and embedded Quick Look |
+| `PhoneFilesMac/Sources/PhoneFiles/PhoneFilesApp.swift` | App entry point and menu bar |
 | `PhoneFilesMac/build-app.sh` | Builds, bundles the native libraries, adds the icon, ad-hoc signs |
 | `phone-files/` | The original browser-based prototype (Python standard library + libmtp via ctypes) |
 

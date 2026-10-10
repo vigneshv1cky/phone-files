@@ -217,6 +217,13 @@ final class MTPDevice {
         return id
     }
 
+    func rename(_ id: UInt32, to name: String) throws {
+        let dev = try require()
+        guard let cName = strdup(name) else { throw MTPError(message: "Out of memory.") }
+        defer { free(cName) }
+        guard LIBMTP_Set_Object_Filename(dev, id, cName) == 0 else { throw errors("Could not rename to “\(name)”.") }
+    }
+
     func delete(_ id: UInt32) throws {
         let dev = try require()
         guard LIBMTP_Delete_Object(dev, id) == 0 else { throw errors("Delete failed.") }
