@@ -1,0 +1,16 @@
+# Swift Package Manager build output
+.build/
+.swiftpm/
+
+# Packaged app produced by build-app.sh
+PhoneFilesMac/build/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Local, per-machine Claude Code settings
+.claude/settings.local.json
