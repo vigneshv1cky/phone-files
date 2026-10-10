@@ -65,10 +65,16 @@ final class MTPDevice {
 
     func connect() throws -> PhoneInfo {
         disconnect(wait: false)
+        guard Self.acquireProcessLock() else {
+            throw MTPError(message: "Another copy of Phone Files is using the phone. Quit it, then press Connect.")
+        }
+        var lastProblem: String?
         for _ in 0..<4 {
             Self.freeUSBFromMacOS()
             Thread.sleep(forTimeInterval: 0.2)
-            if let opened = Self.openFirstUncached() {
+            let (opened, problem) = Self.openFirstUncached()
+            lastProblem = problem ?? lastProblem
+            if let opened {
                 dev = opened
                 return PhoneInfo(
                     model: Self.take(LIBMTP_Get_Modelname(opened)) ?? "Phone",
@@ -77,7 +83,56 @@ final class MTPDevice {
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        throw MTPError(message: "No phone found, or it could not be opened. Plug it in, unlock it, and set USB to “File transfer”.")
+        throw MTPError(message: lastProblem
+            ?? "No phone found, or it could not be opened. Plug it in, unlock it, and set USB to “File transfer”.")
+    }
+
+    // MARK: Crash guards
+
+    /// Only one process on this Mac may talk to the phone. If two copies of the app (or a test
+    /// build) both try, the second's open fails inside libmtp, and libmtp's clean-up after that
+    /// failure sends a USB request on a handle that was never opened — a hard crash. The lock is
+    /// held for the life of the process; the system drops it automatically when the process exits.
+    private static var lockDescriptor: Int32 = -1
+
+    private static func acquireProcessLock() -> Bool {
+        if lockDescriptor >= 0 { return true }
+        let fd = open("/tmp/phonefiles-\(getuid()).lock", O_CREAT | O_RDWR, 0o600)
+        guard fd >= 0 else { return true }  // can't lock: carry on rather than block the user
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            return false
+        }
+        lockDescriptor = fd
+        return true
+    }
+
+    /// Checks that the phone's USB interface can be claimed before libmtp tries to, for the same
+    /// reason: any other app holding it (OpenMTP, Android File Transfer, the photo importer)
+    /// would send libmtp down its crashing failure path. Returns why it can't, or nil if it can.
+    private static func claimProblem(bus: UInt32, address: UInt8) -> String? {
+        var context: OpaquePointer?
+        guard libusb_init(&context) == 0 else { return nil }  // can't check: let libmtp try
+        defer { libusb_exit(context) }
+        var list: UnsafeMutablePointer<OpaquePointer?>?
+        let count = libusb_get_device_list(context, &list)
+        guard count > 0, let list else { return nil }
+        defer { libusb_free_device_list(list, 1) }
+        for index in 0..<Int(count) {
+            guard let device = list[index],
+                  UInt32(libusb_get_bus_number(device)) == bus, libusb_get_device_address(device) == address else { continue }
+            var handle: OpaquePointer?
+            guard libusb_open(device, &handle) == 0, let handle else {
+                return "macOS wouldn’t open the phone’s USB connection. Unplug the phone and plug it back in."
+            }
+            defer { libusb_close(handle) }
+            guard libusb_claim_interface(handle, 0) == 0 else {
+                return "Another app is using the phone (for example OpenMTP or Android File Transfer). Quit it, then press Connect."
+            }
+            libusb_release_interface(handle, 0)
+            return nil
+        }
+        return nil
     }
 
     func disconnect(wait: Bool = true) {
@@ -107,12 +162,15 @@ final class MTPDevice {
 
     /// Opens without libmtp's up-front walk of every object, which takes minutes on a
     /// phone full of photos. Folders are listed on demand instead.
-    private static func openFirstUncached() -> UnsafeMutablePointer<LIBMTP_mtpdevice_t>? {
+    private static func openFirstUncached() -> (UnsafeMutablePointer<LIBMTP_mtpdevice_t>?, String?) {
         var raw: UnsafeMutablePointer<LIBMTP_raw_device_t>?
         var count: Int32 = 0
-        guard LIBMTP_Detect_Raw_Devices(&raw, &count) == LIBMTP_ERROR_NONE, count > 0, let raw else { return nil }
+        guard LIBMTP_Detect_Raw_Devices(&raw, &count) == LIBMTP_ERROR_NONE, count > 0, let raw else { return (nil, nil) }
         defer { free(raw) }
-        return LIBMTP_Open_Raw_Device_Uncached(raw)
+        if let problem = claimProblem(bus: raw.pointee.bus_location, address: raw.pointee.devnum) {
+            return (nil, problem)
+        }
+        return (LIBMTP_Open_Raw_Device_Uncached(raw), nil)
     }
 
     // MARK: Queries

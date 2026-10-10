@@ -27,6 +27,7 @@ install_name_tool -id @rpath/libmtp.9.dylib "$FW/libmtp.9.dylib"
 install_name_tool -id @rpath/libusb-1.0.0.dylib "$FW/libusb-1.0.0.dylib"
 install_name_tool -change "$USB_SRC" @rpath/libusb-1.0.0.dylib "$FW/libmtp.9.dylib"
 install_name_tool -change "$MTP_SRC" @rpath/libmtp.9.dylib "$APP/Contents/MacOS/PhoneFiles"
+install_name_tool -change "$USB_SRC" @rpath/libusb-1.0.0.dylib "$APP/Contents/MacOS/PhoneFiles"
 install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/PhoneFiles"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

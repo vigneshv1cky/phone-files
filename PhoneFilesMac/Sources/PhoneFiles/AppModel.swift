@@ -508,11 +508,12 @@ final class AppModel: ObservableObject {
             self.info = info
             self.battery = battery
             connection = .connected
-            log.info("Connected to \(info.model, privacy: .public), battery \(battery ?? -1)")
+            log.notice("Connected to \(info.model, privacy: .public), battery \(battery ?? -1)")
             do {
                 storages = try await service.run { try $0.storages() }
             } catch {
                 storageError = error.localizedDescription
+                log.notice("Phone storage unavailable: \(error.localizedDescription, privacy: .public)")
             }
             if let storage = storages.first?.id {
                 await load(.phone(storage: storage, folder: MTPDevice.root))  // for the sidebar's phone folders

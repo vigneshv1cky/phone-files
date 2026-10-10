@@ -89,14 +89,25 @@ struct FinderColumnView: NSViewRepresentable {
             keyMonitor = nil
         }
 
+        /// The Finder keys while a column has keyboard focus: ← → between columns (↑ ↓ are the
+        /// browser's own), Space for Quick Look, Return to rename.
         private func handleKey(_ event: NSEvent) -> NSEvent? {
-            guard let browser, let responder = browser.window?.firstResponder as? NSView,
-                  responder.isDescendant(of: browser),
+            guard let browser, event.window === browser.window,
+                  let responder = browser.window?.firstResponder as? NSView, responder.isDescendant(of: browser),
                   event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
             switch event.keyCode {
             case 124: moveRight(); return nil
             case 123: moveLeft(); return nil
-            default: return event
+            case 49:  // Space
+                guard !model.selection.isEmpty || model.quickLookURL != nil else { return event }
+                model.quickLookSelection()
+                return nil
+            case 36, 76:  // Return, Enter
+                guard model.selectedItems.count == 1 else { return event }
+                model.beginRename()
+                return nil
+            default:
+                return event
             }
         }
 

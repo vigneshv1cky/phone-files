@@ -240,6 +240,16 @@ extension AppModel {
         report("Column view → moves into it: \(selection.count == 1), selected \(selectedItems.first?.displayName ?? "nothing"), focus in column \(focus.map(String.init) ?? "none") of \(tables.count)")
         await Self.postArrow(.down)
         report("Column view ↓ inside it: now \(selectedItems.first?.displayName ?? currentTitle)")
+        await Self.postKey(" ", keyCode: 49)
+        let spaceOpened = await waitUntil(4) { quickLookVisible }
+        await Self.postKey(" ", keyCode: 49)
+        let spaceClosed = await waitUntil(3) { !quickLookVisible }
+        quickLookURL = nil
+        report("Column view Space opens Quick Look: \(spaceOpened), Space again closes it: \(spaceClosed)")
+        window.makeFirstResponder(FinderColumnView.Coordinator.columnTables(in: browser).last ?? browser)
+        await Self.postKey("\r", keyCode: 36)
+        report("Column view Return starts rename: \(renameTarget != nil)")
+        renameTarget = nil
         await Self.postArrow(.left)
         report("Column view ← back out: showing \(currentTitle), selected \(selectedItems.first?.displayName ?? "nothing")")
         await Self.postArrow(.left)
@@ -250,6 +260,21 @@ extension AppModel {
     }
 
     private enum Arrow { case up, down, left, right }
+
+    /// Posts a plain key through the normal event queue, as the keyboard would.
+    private static func postKey(_ chars: String, keyCode: UInt16) async {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                                            timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: window.windowNumber, context: nil,
+                                            characters: chars, charactersIgnoringModifiers: chars,
+                                            isARepeat: false, keyCode: keyCode) {
+                NSApp.postEvent(event, atStart: false)
+            }
+        }
+        try? await Task.sleep(for: .seconds(0.8))
+    }
 
     /// Posts an arrow key through the normal event queue, as the keyboard would.
     private static func postArrow(_ arrow: Arrow) async {

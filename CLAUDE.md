@@ -20,9 +20,14 @@ earlier Python/browser prototype; `PhoneFilesMac/` is the app that ships.
 - **Column view is NSBrowser (item-based).** In that mode the delegate's willDisplayCell is never called — icons come from a custom cell that receives the row object as its value. NSBrowser didn't act on synthetic → / ← presses and doesn't send its action for them, so → / ← are handled by a local key monitor (Finder rules: → into the folder selecting its first item, ← back out selecting the folder). Every model→browser sync must not echo back (guard flag). (2026-10-10)
 - One MTP request at a time: every libmtp call goes through `PhoneService`'s serial queue.
 
+## Crash guard: never let libmtp fail an open (2026-10-10)
+- When `LIBMTP_Open_Raw_Device_Uncached` can't claim the USB interface, libmtp's clean-up (`close_usb`) sends a control transfer on a never-opened handle → SIGSEGV inside libusb. Seen when two copies of the app (installed app + a test build) opened the phone at once.
+- Guards: a per-user flock (`/tmp/phonefiles-<uid>.lock`, held for the process lifetime) so only one copy talks to the phone; and a libusb claim probe of interface 0 before calling libmtp, which turns "someone else holds it" into a message.
+- **Quit the installed app before running a test build** (`osascript -e 'quit app "Phone Files"'`), or the test build will (correctly) refuse the phone.
+
 ## Open issues (2026-10-10)
-- One test run crashed with a memory-access fault when the phone was unplugged mid-run; suspected libmtp/libusb use after the device vanished. Needs the crash report and graceful unplug handling.
 - A phone→Mac copy right after browsing phone photos in Column view waited >60 s (likely queued behind preview fetches); not yet diagnosed.
+- After a replug a Pixel often falls back to "No data transfer": it still enumerates as MTP (PID 0x4ee1) but hides storage ("Get Storage information failed"). The fix is on the phone: choose File transfer again.
 
 ## Phone-side requirements
 - USB mode must be "File transfer / Android Auto"; storage is hidden while the screen is locked.
