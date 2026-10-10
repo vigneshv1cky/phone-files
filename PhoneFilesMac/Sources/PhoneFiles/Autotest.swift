@@ -32,6 +32,8 @@ extension AppModel {
 
     private func report(_ message: String) {
         log.notice("Autotest: \(message, privacy: .public)")
+        print("Autotest: \(message)")  // full text on stdout; the system log truncates long lines
+        fflush(stdout)
     }
 
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
@@ -111,6 +113,62 @@ extension AppModel {
         let pasteState = await waitForTransfers(after: before)
         report("clipboard paste Mac→Mac: \(pasteState), file there: \(FileManager.default.fileExists(atPath: copied.path))")
 
+        // Which views accept drags, per view mode (a view that registers but rejects swallows drops).
+        if let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) {
+            for mode in ViewMode.allCases {
+                viewMode = mode
+                try? await Task.sleep(for: .seconds(1.2))
+                func walk(_ view: NSView, _ depth: Int, into out: inout [String]) {
+                    let types = view.registeredDraggedTypes.map(\.rawValue)
+                    if !types.isEmpty {
+                        out.append("\(String(describing: type(of: view)))@\(depth)[\(types.joined(separator: ","))]")
+                    }
+                    for sub in view.subviews { walk(sub, depth + 1, into: &out) }
+                }
+                var found: [String] = []
+                walk(window.contentView!.superview ?? window.contentView!, 0, into: &found)
+                report("drag-accepting views in \(mode.title): \(found.joined(separator: " | "))")
+            }
+            viewMode = .list
+        }
+
+        // A drop from Finder: Finder hands over plain file URLs.
+        let outside = root.appendingPathComponent("zz-other.txt")
+        before = transfers.count
+        _ = handleDrop([NSItemProvider(object: outside as NSURL)], to: .mac(sub))
+        let finderDrop = await waitForTransfers(after: before)
+        report("drop from Finder (window/icon/list/gallery path): \(finderDrop), file there: \(FileManager.default.fileExists(atPath: sub.appendingPathComponent("zz-other.txt").path)), original kept: \(FileManager.default.fileExists(atPath: outside.path))")
+        let board = NSPasteboard(name: NSPasteboard.Name("phonefiles.autotest.\(UUID().uuidString)"))
+        board.clearContents()
+        board.writeObjects([root.appendingPathComponent("notes.txt") as NSURL])
+        before = transfers.count
+        _ = handlePasteboardDrop(board, to: .mac(sub), forceCopy: false)
+        let columnDrop = await waitForTransfers(after: before)
+        report("drop from Finder (column view path): \(columnDrop), copies in folder: \((try? FileManager.default.contentsOfDirectory(atPath: sub.path).sorted()) ?? [])")
+        board.releaseGlobally()
+
+        // Real Command-C / Command-V key presses, through the menu bar like the keyboard.
+        if let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) {
+            navigate(to: .mac(root))
+            viewMode = .list
+            _ = await waitUntil(5) { hasListing }
+            try? await Task.sleep(for: .seconds(1))
+            selection = [MacFiles.item(root.appendingPathComponent("notes.txt")).id]
+            if let table = Self.findTable(in: window.contentView!) { window.makeFirstResponder(table) }
+            await Self.postCommand("c", keyCode: 8)
+            let onClipboard = (NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL])?.map(\.lastPathComponent) ?? []
+            navigate(to: .mac(root.appendingPathComponent("Existing Folder")))
+            _ = await waitUntil(5) { hasListing }
+            try? await Task.sleep(for: .seconds(1))
+            if let table = Self.findTable(in: window.contentView!) { window.makeFirstResponder(table) }
+            before = transfers.count
+            await Self.postCommand("v", keyCode: 9)
+            let keyPaste = await waitForTransfers(after: before)
+            report("⌘C then ⌘V (Mac): clipboard had \(onClipboard), paste \(keyPaste), file there: \(FileManager.default.fileExists(atPath: root.appendingPathComponent("Existing Folder/notes.txt").path))")
+            navigate(to: .mac(root))
+            _ = await waitUntil(5) { hasListing }
+        }
+
         // Back and forward history.
         goBack()
         _ = await waitUntil(3) { location == .mac(root) }
@@ -149,9 +207,89 @@ extension AppModel {
                     report("copy phone→Mac: \(state), size matches: \(MacFiles.size(local) == file.size), still on phone: \(children[location.key]?.contains { $0.id == file.id } ?? false)")
                 }
             }
+            if let scratch, let photo = visibleItems.first(where: { !$0.isFolder && $0.size <= Self.autoPreviewLimit }),
+               let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) {
+                viewMode = .list
+                selection = [photo.id]
+                try? await Task.sleep(for: .seconds(1))
+                if let table = Self.findTable(in: window.contentView!) { window.makeFirstResponder(table) }
+                await Self.postCommand("c", keyCode: 8)
+                let ready = await waitUntil(30) {
+                    ((NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL]) ?? []).contains {
+                        $0.lastPathComponent == photo.name && MacFiles.size($0) == photo.size
+                    }
+                }
+                report("⌘C on a phone photo puts a real file on the clipboard for Finder: \(ready)")
+                let here = location
+                navigate(to: .mac(scratch))
+                _ = await waitUntil(5) { hasListing }
+                try? await Task.sleep(for: .seconds(1))
+                if let table = Self.findTable(in: window.contentView!) { window.makeFirstResponder(table) }
+                let before = transfers.count
+                await Self.postCommand("v", keyCode: 9)
+                let state = await waitForTransfers(after: before)
+                report("⌘V of the phone photo into a Mac folder: \(state), size matches: \(MacFiles.size(scratch.appendingPathComponent(photo.name)) == photo.size)")
+                navigate(to: here)
+                _ = await waitUntil(5) { hasListing }
+            }
             goUp()
             _ = await waitUntil(5) { hasListing }
         }
+        if ProcessInfo.processInfo.environment["PHONEFILES_AUTOTEST_WRITE"] == "1", let scratch {
+            await testWritingToPhone(storage: storage, scratch: scratch)
+        }
+    }
+
+    /// Opt-in: writes to the phone, inside one new folder "Download/Phone Files Test". Nothing is deleted.
+    private func testWritingToPhone(storage: UInt32, scratch: URL) async {
+        navigate(to: .phone(storage: storage, path: []))
+        _ = await waitUntil(10) { hasListing }
+        guard let download = visibleItems.first(where: { $0.isFolder && $0.name == "Download" }) else { return report("no Download folder") }
+        open(download)
+        _ = await waitUntil(10) { hasListing }
+        if !visibleItems.contains(where: { $0.isFolder && $0.name == "Phone Files Test" }) {
+            makeFolder(named: "Phone Files Test")
+            _ = await waitUntil(10) { visibleItems.contains { $0.isFolder && $0.name == "Phone Files Test" } }
+        }
+        guard let testFolder = visibleItems.first(where: { $0.isFolder && $0.name == "Phone Files Test" }) else {
+            return report("could not create Phone Files Test on the phone")
+        }
+        let testLocation = child(testFolder, of: location)
+        report("phone test folder ready: Download/Phone Files Test")
+
+        // 1. A file dropped from Finder onto the phone folder.
+        let macFile = scratch.appendingPathComponent("notes.txt")
+        var before = transfers.count
+        _ = handleDrop([NSItemProvider(object: macFile as NSURL)], to: testLocation)
+        let dropState = await waitForTransfers(after: before)
+        await load(testLocation.key)
+        report("drop from Finder onto phone folder: \(dropState), on phone now: \(children[testLocation.key]?.map(\.name) ?? [])")
+
+        // 2. Copy a phone photo, paste into the phone folder.
+        navigate(to: .phone(storage: storage, path: []))
+        _ = await waitUntil(10) { hasListing }
+        guard let pictures = visibleItems.first(where: { $0.isFolder && $0.name == "Pictures" }) else { return }
+        open(pictures)
+        _ = await waitUntil(10) { hasListing }
+        guard let photo = visibleItems.first(where: { !$0.isFolder && $0.size <= Self.autoPreviewLimit }) else { return }
+        selection = [photo.id]
+        copySelectionToClipboard()
+        report("copied \(photo.name) (\(AppModel.format(bytes: photo.size))); paste available: \(canPaste)")
+        navigate(to: testLocation)
+        _ = await waitUntil(10) { hasListing }
+        before = transfers.count
+        paste(move: false)
+        let pastePhone = await waitForTransfers(after: before)
+        await load(testLocation.key)
+        report("paste phone→phone: \(pastePhone), on phone now: \(children[testLocation.key]?.map(\.name) ?? [])")
+
+        // 3. Paste the same phone photo into a Mac folder.
+        navigate(to: .mac(scratch))
+        _ = await waitUntil(5) { hasListing }
+        before = transfers.count
+        paste(move: false)
+        let pasteMac = await waitForTransfers(after: before)
+        report("paste phone→Mac: \(pasteMac), file there: \(FileManager.default.fileExists(atPath: scratch.appendingPathComponent(photo.name).path))")
     }
 
     // MARK: Shared checks
@@ -260,6 +398,21 @@ extension AppModel {
     }
 
     private enum Arrow { case up, down, left, right }
+
+    /// Posts a Command-key shortcut through the normal event queue, so the menu bar handles it.
+    private static func postCommand(_ chars: String, keyCode: UInt16) async {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [.command],
+                                            timestamp: ProcessInfo.processInfo.systemUptime,
+                                            windowNumber: window.windowNumber, context: nil,
+                                            characters: chars, charactersIgnoringModifiers: chars,
+                                            isARepeat: false, keyCode: keyCode) {
+                NSApp.postEvent(event, atStart: false)
+            }
+        }
+        try? await Task.sleep(for: .seconds(1))
+    }
 
     /// Posts a plain key through the normal event queue, as the keyboard would.
     private static func postKey(_ chars: String, keyCode: UInt16) async {

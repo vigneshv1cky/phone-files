@@ -706,7 +706,7 @@ final class AppModel: ObservableObject {
     /// always copies (like an external drive); within one device `move` moves.
     func transfer(_ items: [FileItem], to destination: Location, move requestedMove: Bool) {
         let items = items.filter { !isInside(destination, $0) }
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty else { return log.notice("Transfer skipped: nothing to copy (or a folder into itself)") }
         let move = requestedMove && sameDevice(items, destination)
         if move && items.allSatisfy({ parentKey(of: $0) == destination.key }) { return }  // already there
         if destination.isPhone && connection != .connected {
@@ -715,12 +715,15 @@ final class AppModel: ObservableObject {
         }
         let label = items.count == 1 ? items[0].displayName : "\(items.count) items"
         let transfer = startTransfer("\(move ? "Moving" : "Copying") \(label) to \(title(of: destination))")
+        log.notice("Transfer started: \(transfer.title, privacy: .public)")
         Task {
             do {
                 try await perform(items, to: destination, move: move, transfer: transfer)
                 finish(transfer, .done)
+                log.notice("Transfer done: \(transfer.title, privacy: .public)")
             } catch {
                 finish(transfer, transfer.token.isCancelled ? .cancelled : .failed(error.localizedDescription))
+                log.error("Transfer failed: \(transfer.title, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
             await reloadIfCached(destination.key)
             if move { for key in Set(items.map(parentKey)) { await reloadIfCached(key) } }
@@ -922,14 +925,49 @@ final class AppModel: ObservableObject {
         clipboard = items
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        let urls = items.compactMap(\.macURL)
-        if urls.isEmpty {
-            pasteboard.setString(items.map(\.name).joined(separator: "\n"), forType: .string)
-        } else {
-            pasteboard.writeObjects(urls as [NSURL])  // so Finder can paste Mac files too
+        let macURLs = items.compactMap(\.macURL)
+        let phoneItems = items.compactMap(\.phoneItem)
+        guard !phoneItems.isEmpty else {
+            pasteboard.writeObjects(macURLs as [NSURL])  // Finder can paste these directly
+            clipboardChangeCount = pasteboard.changeCount
+            return
         }
+        // Finder can only paste real files, and phone files aren't on the Mac yet: fetch them
+        // to a temporary folder in the background, then put those files on the clipboard.
+        // Pasting inside this app doesn't wait for that — it copies straight from the phone.
+        pasteboard.setString(items.map(\.name).joined(separator: "\n"), forType: .string)
         clipboardChangeCount = pasteboard.changeCount
+        let total = phoneItems.reduce(0) { $0 + $1.size }
+        guard total <= Self.finderPasteLimit else {
+            log.notice("Clipboard: \(Self.format(bytes: total)) of phone files is too much to prepare for Finder")
+            return
+        }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PhoneFilesClipboard", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let label = items.count == 1 ? items[0].displayName : "\(items.count) items"
+        let transfer = startTransfer("Preparing \(label) for pasting in Finder")
+        let expected = clipboardChangeCount
+        Task {
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let fetched = try await download(phoneItems, into: dir, transfer: transfer)
+                // Something else was copied meanwhile: leave the clipboard alone.
+                guard pasteboard.changeCount == expected else { return finish(transfer, .cancelled) }
+                pasteboard.clearContents()
+                pasteboard.writeObjects((macURLs + fetched) as [NSURL])
+                clipboardChangeCount = pasteboard.changeCount
+                finish(transfer, .done)
+                transfer.detail = "Ready to paste in Finder"
+                log.notice("Clipboard: \(fetched.count) phone file(s) ready for Finder")
+            } catch {
+                finish(transfer, transfer.token.isCancelled ? .cancelled : .failed(error.localizedDescription))
+            }
+        }
     }
+
+    /// Larger phone selections aren't fetched just for the clipboard; use Copy To… instead.
+    static let finderPasteLimit: UInt64 = 2_000_000_000
 
     var canPaste: Bool {
         let pasteboard = NSPasteboard.general
@@ -1046,6 +1084,7 @@ final class AppModel: ObservableObject {
         }
         // Files dragged in from Finder or another app are copied, never moved.
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        log.notice("Drop: \(providers.count) provider(s), \(fileProviders.count) with file URLs, types \(providers.first?.registeredTypeIdentifiers ?? [], privacy: .public)")
         guard !fileProviders.isEmpty else { return false }
         let group = DispatchGroup()
         let lock = NSLock()
@@ -1058,7 +1097,10 @@ final class AppModel: ObservableObject {
             }
         }
         group.notify(queue: .main) {
-            MainActor.assumeIsolated { self.transfer(urls.map(MacFiles.item), to: destination, move: false) }
+            MainActor.assumeIsolated {
+                log.notice("Drop: read \(urls.count) file URL(s) from \(fileProviders.count) provider(s)")
+                self.transfer(urls.map(MacFiles.item), to: destination, move: false)
+            }
         }
         return true
     }

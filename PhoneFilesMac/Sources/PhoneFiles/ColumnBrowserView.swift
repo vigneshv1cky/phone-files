@@ -52,7 +52,7 @@ struct FinderColumnView: NSViewRepresentable {
     }
 
     func updateNSView(_ browser: NSBrowser, context: Context) {
-        context.coordinator.sync()
+        context.coordinator.requestSync()
     }
 
     static func dismantleNSView(_ browser: NSBrowser, coordinator: Coordinator) {
@@ -171,8 +171,28 @@ struct FinderColumnView: NSViewRepresentable {
             return built
         }
 
+        private var syncScheduled = false
+
+        /// Applies model changes after the current SwiftUI update instead of inside it.
+        ///
+        /// Selecting a row makes NSBrowser animate its scroll, and that animation runs a nested
+        /// run loop. Called from inside updateNSView, the nested loop let SwiftUI run its next
+        /// update, which called updateNSView, which selected again, which animated again… — the
+        /// app re-entered itself forever and froze. Coalescing onto the next main-queue turn, and
+        /// refusing to nest, breaks that loop.
+        func requestSync() {
+            guard !syncScheduled else { return }
+            syncScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.syncScheduled = false
+                self.sync()
+            }
+        }
+
         func sync() {
             guard let browser else { return }
+            guard !applying else { return requestSync() }  // already mid-sync: run again afterwards
             applying = true
             defer { applying = false }
             let columns = model.columnLocations
@@ -328,6 +348,7 @@ struct FinderColumnView: NSViewRepresentable {
             let destination = (row >= 0 ? node(browser, row: row, column: column)?.location : nil) ?? folder(of: browser, column: column)
             guard let destination else { return false }
             let forceCopy = NSEvent.modifierFlags.contains(.option) || info.draggingSourceOperationMask == .copy
+            log.notice("Drop: column view accepted a drop, types \(info.draggingPasteboard.types?.map(\.rawValue) ?? [], privacy: .public)")
             return model.handlePasteboardDrop(info.draggingPasteboard, to: destination, forceCopy: forceCopy)
         }
 

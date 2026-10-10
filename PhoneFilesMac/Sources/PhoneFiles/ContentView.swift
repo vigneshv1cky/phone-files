@@ -226,7 +226,10 @@ struct FolderDrop: DropDelegate {
         enabled && info.hasItemsConforming(to: [.phoneFilesItem, .fileURL])
     }
 
-    func dropEntered(info: DropInfo) { model.dropTargetID = targetID }
+    func dropEntered(info: DropInfo) {
+        model.dropTargetID = targetID
+        log.notice("Drop: drag entered \(targetID, privacy: .public) (from Finder: \(info.hasItemsConforming(to: [.fileURL])), internal: \(info.hasItemsConforming(to: [.phoneFilesItem])))")
+    }
 
     func dropExited(info: DropInfo) {
         if model.dropTargetID == targetID { model.dropTargetID = nil }
@@ -239,6 +242,7 @@ struct FolderDrop: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         model.dropTargetID = nil
+        log.notice("Drop: dropped on \(targetID, privacy: .public), \(info.itemProviders(for: [.phoneFilesItem, .fileURL]).count) item(s)")
         return model.handleDrop(info.itemProviders(for: [.phoneFilesItem, .fileURL]), to: destination)
     }
 }
