@@ -1,0 +1,5 @@
+module CMTP [system] {
+    header "shim.h"
+    link "mtp"
+    export *
+}

@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phone Files</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+    --line: #e4e4df; --hover: #f0f0ec; --accent: #1a73e8; --accent-text: #fff;
+    --danger: #c5221f; --sel: #e8f0fe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1e1e1c; --text: #ececea; --muted: #9a9a94;
+      --line: #2e2e2b; --hover: #262624; --accent: #8ab4f8; --accent-text: #0b1b33;
+      --danger: #f28b82; --sel: #23324a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .app { display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
+  aside { border-right: 1px solid var(--line); padding: 16px; overflow: auto; background: var(--panel); }
+  aside h1 { font-size: 15px; margin: 0 0 12px; }
+  .device { padding: 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; }
+  .device .model { font-weight: 600; }
+  .device .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .dot.on { background: #1e8e3e; }
+  .storage { padding: 8px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
+  .storage:hover { background: var(--hover); }
+  .storage.active { background: var(--sel); }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); }
+  .small { font-size: 12px; color: var(--muted); }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  .toolbar { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line);
+             background: var(--panel); flex-wrap: wrap; }
+  .crumbs { flex: 1; min-width: 200px; display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+  .crumbs a { color: var(--text); text-decoration: none; padding: 2px 6px; border-radius: 4px; cursor: pointer; }
+  .crumbs a:hover { background: var(--hover); }
+  .crumbs span { color: var(--muted); }
+  .content { flex: 1; overflow: auto; padding: 8px 16px 24px; position: relative; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 8px; border-bottom: 1px solid var(--line);
+       cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--bg); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td.name { width: 100%; white-space: normal; word-break: break-word; }
+  tr.row:hover { background: var(--hover); }
+  .name-cell { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+  .icon { width: 32px; height: 32px; border-radius: 4px; display: grid; place-items: center; flex: none;
+          background: var(--hover); font-size: 16px; overflow: hidden; }
+  .icon img { width: 100%; height: 100%; object-fit: cover; }
+  .actions { display: flex; gap: 4px; justify-content: flex-end; }
+  .actions button { padding: 3px 8px; font-size: 12px; }
+  .actions .del { color: var(--danger); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; padding-top: 8px; }
+  .tile { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; cursor: pointer; }
+  .tile:hover { border-color: var(--accent); }
+  .tile .thumb { aspect-ratio: 1; display: grid; place-items: center; background: var(--hover); font-size: 36px; }
+  .tile .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .tile .label { padding: 6px 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .notice { margin: 40px auto; max-width: 460px; text-align: center; color: var(--muted); }
+  .notice strong { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
+  .notice button { margin-top: 14px; }
+  .drop { position: absolute; inset: 8px; border: 2px dashed var(--accent); border-radius: 12px; display: none;
+          place-items: center; background: color-mix(in srgb, var(--bg) 85%, transparent); font-size: 16px; z-index: 5; }
+  .drop.show { display: grid; }
+  .toast { position: fixed; bottom: 16px; right: 16px; background: var(--text); color: var(--bg); padding: 10px 14px;
+           border-radius: 8px; max-width: 420px; display: none; z-index: 20; }
+  .toast.show { display: block; }
+  .viewer { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; z-index: 10;
+            flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+  .viewer.show { display: flex; }
+  .viewer img, .viewer video { max-width: 92vw; max-height: 82vh; }
+  .viewer .vbar { display: flex; gap: 8px; align-items: center; color: #fff; }
+  .viewer .vbar button { background: #2a2a2a; border-color: #444; color: #fff; }
+  @media (max-width: 700px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: 100vh; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+    .hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>Phone Files</h1>
+    <div class="device" id="device"><span class="dot"></span>Looking for phone…</div>
+    <div class="small" style="margin:0 0 6px">Storage</div>
+    <div id="storages"></div>
+  </aside>
+  <main>
+    <div class="toolbar">
+      <button id="up" title="Up one folder">↑</button>
+      <div class="crumbs" id="crumbs"></div>
+      <button id="view" title="Switch between list and grid">Grid</button>
+      <button id="refresh">Refresh</button>
+      <button id="mkdir">New folder</button>
+      <button id="upload" class="primary">Upload</button>
+      <input type="file" id="picker" multiple hidden>
+    </div>
+    <div class="content" id="content">
+      <div class="drop" id="drop">Drop files to upload to this folder</div>
+      <div id="listing"></div>
+    </div>
+  </main>
+</div>
+<div class="viewer" id="viewer">
+  <div id="vbody"></div>
+  <div class="vbar"><span id="vname"></span><button id="vprev">‹</button><button id="vnext">›</button>
+    <button id="vdl">Download</button><button id="vclose">Close</button></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const ROOT = 4294967295;
+const IMG = /\.(jpe?g|png|gif|webp|bmp|heic|heif|dng)$/i;
+const VID = /\.(mp4|mov|webm|3gp|mkv)$/i;
+const state = { storage: null, path: [], items: [], sort: { key: "name", dir: 1 },
+                grid: localGet("grid") === "1", viewing: -1 };
+const $ = id => document.getElementById(id);
+
+function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function localSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+function esc(s) { return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function size(n) { if (n == null) return ""; const u = ["B","KB","MB","GB","TB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + " " + u[i]; }
+function date(t) { return t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : ""; }
+function toast(msg, ms = 3500) { const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove("show"), ms); }
+function icon(it) { if (it.folder) return "📁"; if (IMG.test(it.name)) return "🖼️"; if (VID.test(it.name)) return "🎞️";
+  if (/\.(mp3|m4a|wav|ogg|flac|aac|opus)$/i.test(it.name)) return "🎵"; if (/\.pdf$/i.test(it.name)) return "📕";
+  if (/\.(zip|apk|rar|7z|gz)$/i.test(it.name)) return "🗜️"; return "📄"; }
+const parent = () => state.path.length ? state.path[state.path.length - 1].id : ROOT;
+
+async function api(path, opts = {}) {
+  const headers = { "X-Phone-Files": "1", ...(opts.headers || {}) };
+  const r = await fetch(path, { ...opts, headers });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.error) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function notice(title, msg, withRetry = true) {
+  $("listing").innerHTML = `<div class="notice"><strong>${esc(title)}</strong>${esc(msg)}` +
+    (withRetry ? `<br><button class="primary" onclick="reconnect()">Reconnect</button>` : "") + `</div>`;
+}
+
+async function status() {
+  try {
+    const s = await api("/api/status");
+    renderDevice(s);
+    if (!s.connected) return notice("Phone not connected", s.error);
+    await loadStorages();
+  } catch (e) { notice("Phone not connected", e.message); }
+}
+
+async function reconnect() {
+  notice("Connecting…", "Looking for the phone over USB.", false);
+  // The phone renumbers every file and folder per session, so the old path is meaningless now.
+  state.storage = null; state.path = [];
+  try { renderDevice(await api("/api/connect", { method: "POST" })); await loadStorages(); }
+  catch (e) { renderDevice({ connected: false }); notice("Could not connect", e.message); }
+}
+
+function renderDevice(s) {
+  $("device").innerHTML = s.connected
+    ? `<div class="model"><span class="dot on"></span>${esc(s.name || s.model || "Phone")}</div>
+       <div class="meta">${esc(s.model || "")}${s.battery != null ? " · Battery " + s.battery + "%" : ""}</div>
+       <button style="margin-top:8px;width:100%" onclick="reconnect()">Reconnect</button>`
+    : `<span class="dot"></span>Not connected<button style="margin-top:8px;width:100%" onclick="reconnect()">Connect</button>`;
+}
+
+async function loadStorages() {
+  let list;
+  try { list = await api("/api/storages"); }
+  catch (e) { $("storages").innerHTML = ""; return notice("Storage is locked", e.message); }
+  $("storages").innerHTML = list.map(s => {
+    const used = s.capacity ? Math.round(100 * (s.capacity - s.free) / s.capacity) : 0;
+    return `<div class="storage" data-id="${s.id}"><div>${esc(s.name)}</div>
+      <div class="bar"><div style="width:${used}%"></div></div>
+      <div class="small">${size(s.free)} free of ${size(s.capacity)}</div></div>`;
+  }).join("");
+  document.querySelectorAll(".storage").forEach(el => el.onclick = () => openStorage(+el.dataset.id));
+  if (!list.some(s => s.id === state.storage)) openStorage(list[0].id);
+  else load();
+}
+
+function openStorage(id) {
+  state.storage = id; state.path = [];
+  document.querySelectorAll(".storage").forEach(el => el.classList.toggle("active", +el.dataset.id === id));
+  load();
+}
+
+async function load() {
+  renderCrumbs();
+  $("listing").innerHTML = `<div class="notice">Loading…</div>`;
+  try { state.items = await api(`/api/list?storage=${state.storage}&parent=${parent()}`); render(); }
+  catch (e) { notice("Could not read this folder", e.message); }
+}
+
+function renderCrumbs() {
+  const name = document.querySelector(".storage.active div")?.textContent || "Phone";
+  const parts = [`<a data-i="-1">${esc(name)}</a>`].concat(
+    state.path.map((p, i) => `<span>›</span><a data-i="${i}">${esc(p.name)}</a>`));
+  $("crumbs").innerHTML = parts.join("");
+  $("crumbs").querySelectorAll("a").forEach(a => a.onclick = () => { state.path = state.path.slice(0, +a.dataset.i + 1); load(); });
+  $("up").disabled = !state.path.length;
+}
+
+function sorted() {
+  const { key, dir } = state.sort;
+  return [...state.items].sort((a, b) => (b.folder - a.folder) ||
+    (key === "name" ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : (a[key] - b[key])) * dir);
+}
+
+function thumbFor(it) {
+  return (IMG.test(it.name) || VID.test(it.name)) ? `<img loading="lazy" src="/api/thumb/${it.id}" onerror="this.replaceWith(document.createTextNode('${icon(it)}'))">` : icon(it);
+}
+
+function render() {
+  const items = sorted();
+  $("view").textContent = state.grid ? "List" : "Grid";
+  if (!items.length) return $("listing").innerHTML = `<div class="notice"><strong>Empty folder</strong>Drop files here to upload.</div>`;
+  if (state.grid) {
+    $("listing").innerHTML = `<div class="grid">` + items.map((it, i) =>
+      `<div class="tile" data-i="${i}" title="${esc(it.name)}"><div class="thumb">${thumbFor(it)}</div>
+       <div class="label">${esc(it.name)}</div></div>`).join("") + `</div>`;
+    $("listing").querySelectorAll(".tile").forEach(el => el.onclick = () => openItem(items, +el.dataset.i));
+    return;
+  }
+  const arrow = k => state.sort.key === k ? (state.sort.dir > 0 ? " ↑" : " ↓") : "";
+  $("listing").innerHTML = `<table><thead><tr><th data-k="name">Name${arrow("name")}</th>
+    <th data-k="size" class="hide-sm">Size${arrow("size")}</th><th data-k="modified" class="hide-sm">Modified${arrow("modified")}</th><th></th></tr></thead><tbody>` +
+    items.map((it, i) => `<tr class="row"><td class="name"><div class="name-cell" data-i="${i}">
+      <div class="icon">${thumbFor(it)}</div><div>${esc(it.name)}</div></div></td>
+      <td class="hide-sm">${it.folder ? "" : size(it.size)}</td><td class="hide-sm">${date(it.modified)}</td>
+      <td><div class="actions">${it.folder ? "" : `<button data-dl="${it.id}">Download</button>`}
+      <button class="del" data-del="${i}">Delete</button></div></td></tr>`).join("") + `</tbody></table>`;
+  $("listing").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+    const k = th.dataset.k; state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : 1 }; render(); });
+  $("listing").querySelectorAll(".name-cell").forEach(el => el.onclick = () => openItem(items, +el.dataset.i));
+  $("listing").querySelectorAll("[data-dl]").forEach(b => b.onclick = () => download(+b.dataset.dl));
+  $("listing").querySelectorAll("[data-del]").forEach(b => b.onclick = () => remove(items[+b.dataset.del]));
+}
+
+function openItem(items, i) {
+  const it = items[i];
+  if (it.folder) { state.path.push({ id: it.id, name: it.name }); return load(); }
+  const media = items.filter(x => !x.folder && (IMG.test(x.name) || VID.test(x.name)));
+  const idx = media.indexOf(it);
+  if (idx < 0) return download(it.id);
+  state.media = media; showMedia(idx);
+}
+
+function showMedia(i) {
+  const list = state.media; if (i < 0 || i >= list.length) return;
+  state.viewing = i; const it = list[i];
+  $("vbody").innerHTML = VID.test(it.name) ? `<video src="/api/file/${it.id}" controls autoplay></video>` : `<img src="/api/file/${it.id}">`;
+  $("vname").textContent = `${it.name} · ${size(it.size)}`;
+  $("vprev").disabled = i === 0; $("vnext").disabled = i === list.length - 1;
+  $("viewer").classList.add("show");
+}
+function closeViewer() { $("viewer").classList.remove("show"); $("vbody").innerHTML = ""; state.viewing = -1; }
+$("vclose").onclick = closeViewer;
+$("vprev").onclick = () => showMedia(state.viewing - 1);
+$("vnext").onclick = () => showMedia(state.viewing + 1);
+$("vdl").onclick = () => download(state.media[state.viewing].id);
+document.addEventListener("keydown", e => {
+  if (state.viewing < 0) return;
+  if (e.key === "Escape") closeViewer();
+  if (e.key === "ArrowLeft") showMedia(state.viewing - 1);
+  if (e.key === "ArrowRight") showMedia(state.viewing + 1);
+});
+
+function download(id) { const a = document.createElement("a"); a.href = `/api/file/${id}?download=1`; a.click(); }
+
+async function remove(it) {
+  if (!confirm(`Delete "${it.name}" from the phone?${it.folder ? "\nEverything inside this folder will be deleted too." : ""}\nThis cannot be undone.`)) return;
+  try { await api("/api/delete", { method: "POST", body: JSON.stringify({ id: it.id }) }); toast(`Deleted ${it.name}`); load(); }
+  catch (e) { toast("Delete failed: " + e.message); }
+}
+
+async function uploadFiles(files) {
+  if (!state.storage) return toast("Connect the phone first.");
+  let done = 0;
+  for (const f of files) {
+    toast(`Uploading ${f.name} (${done + 1} of ${files.length})…`, 600000);
+    try {
+      await api(`/api/upload?storage=${state.storage}&parent=${parent()}&name=${encodeURIComponent(f.name)}`, { method: "PUT", body: f });
+      done++;
+    } catch (e) { toast(`Upload of ${f.name} failed: ${e.message}`, 6000); load(); return; }
+  }
+  toast(`Uploaded ${done} file${done === 1 ? "" : "s"}`); load();
+}
+
+$("up").onclick = () => { state.path.pop(); load(); };
+$("refresh").onclick = () => state.storage ? load() : status();
+$("view").onclick = () => { state.grid = !state.grid; localSet("grid", state.grid ? "1" : "0"); render(); };
+$("upload").onclick = () => $("picker").click();
+$("picker").onchange = e => { uploadFiles([...e.target.files]); e.target.value = ""; };
+$("mkdir").onclick = async () => {
+  const name = prompt("New folder name"); if (!name) return;
+  try { await api("/api/mkdir", { method: "POST", body: JSON.stringify({ name, storage: state.storage, parent: parent() }) }); load(); }
+  catch (e) { toast("Could not create folder: " + e.message); }
+};
+const content = $("content"); let depth = 0;
+content.addEventListener("dragenter", e => { e.preventDefault(); depth++; $("drop").classList.add("show"); });
+content.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; $("drop").classList.remove("show"); } });
+content.addEventListener("dragover", e => e.preventDefault());
+content.addEventListener("drop", e => { e.preventDefault(); depth = 0; $("drop").classList.remove("show");
+  if (e.dataTransfer.files.length) uploadFiles([...e.dataTransfer.files]); });
+
+status();
+</script>
+</body>
+</html>
