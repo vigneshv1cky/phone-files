@@ -45,6 +45,19 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSDesktopFolderUsageDescription</key><string>Phone Files shows and copies the files on your Desktop.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>Phone Files shows and copies the files in your Documents folder.</string>
+    <key>NSDownloadsFolderUsageDescription</key><string>Phone Files shows and copies the files in your Downloads folder.</string>
+    <key>NSRemovableVolumesUsageDescription</key><string>Phone Files shows and copies the files on external drives.</string>
+    <key>NSNetworkVolumesUsageDescription</key><string>Phone Files shows and copies the files on network drives.</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>local.phonefiles.item</string>
+            <key>UTTypeDescription</key><string>Phone Files item</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

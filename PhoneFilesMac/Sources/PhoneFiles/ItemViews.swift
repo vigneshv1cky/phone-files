@@ -1,37 +1,35 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Shared pieces
 
-/// File or folder icon, or the phone's thumbnail once loaded. Takes plain values only.
+/// Finder's icon for the item, or its picture thumbnail once loaded. Takes plain values only.
 struct ItemIcon: View {
-    let item: PhoneItem
+    let item: FileItem
     let thumbnail: NSImage?
     let size: CGFloat
 
     var body: some View {
         Group {
             if let thumbnail {
-                Image(nsImage: thumbnail).resizable().scaledToFill()
+                Image(nsImage: thumbnail).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: max(2, size * 0.06)))
             } else {
-                Image(systemName: FileKind(item).symbol)
-                    .resizable().scaledToFit()
-                    .padding(size * 0.12)
-                    .foregroundStyle(item.isFolder ? Color.accentColor : .secondary)
+                Image(nsImage: Icons.icon(for: item)).resizable().scaledToFit()
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: max(2, size * 0.12)))
     }
 }
 
 /// Finder-style click handling: plain click selects, Command toggles, Shift extends a range.
 @MainActor
 struct SelectionClicks {
-    let model: PhoneModel
-    let items: [PhoneItem]
+    let model: AppModel
+    let items: [FileItem]
 
-    func click(_ item: PhoneItem, anchor: inout UInt32?) {
+    func click(_ item: FileItem, anchor: inout String?) {
         let flags = NSEvent.modifierFlags
         if flags.contains(.command) {
             if model.selection.contains(item.id) { model.selection.remove(item.id) } else { model.selection.insert(item.id) }
@@ -56,8 +54,8 @@ struct SelectionClicks {
 }
 
 extension View {
-    /// Space = Quick Look, Return = rename, Command-Down = open: the Finder keys.
-    func finderKeys(_ model: PhoneModel) -> some View {
+    /// Space = Quick Look, Return = rename: the Finder keys.
+    func finderKeys(_ model: AppModel) -> some View {
         self
             .onKeyPress(.space) {
                 guard !model.selection.isEmpty || model.quickLookURL != nil else { return .ignored }
@@ -70,23 +68,41 @@ extension View {
                 return .handled
             }
     }
+
+    /// Makes a folder accept drops (files go inside it); other items are left alone.
+    @ViewBuilder
+    func folderDropTarget(_ item: FileItem, in parent: Location, model: AppModel) -> some View {
+        if item.isFolder {
+            self
+                .onDrop(of: [.phoneFilesItem, .fileURL],
+                        delegate: FolderDrop(model: model, destination: model.child(item, of: parent), targetID: item.id))
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(model.dropTargetID == item.id ? Color.accentColor.opacity(0.3) : Color.clear))
+        } else {
+            self
+        }
+    }
 }
 
 // MARK: - List
 
 struct ListBrowser: View {
-    @ObservedObject var model: PhoneModel
+    @ObservedObject var model: AppModel
 
     var body: some View {
         let items = model.visibleItems
         let iconSize = model.listIconSize
-        Table(of: PhoneItem.self, selection: $model.selection, sortOrder: sortOrder) {
-            TableColumn("Name", value: \.name, comparator: .localizedStandard) { item in
+        let here = model.location
+        Table(of: FileItem.self, selection: $model.selection, sortOrder: sortOrder) {
+            TableColumn("Name", value: \.displayName, comparator: .localizedStandard) { item in
                 HStack(spacing: 6) {
                     ItemIcon(item: item, thumbnail: model.thumbnails[item.id], size: iconSize)
                         .onAppear { model.loadThumbnail(for: item) }
-                    Text(item.name).lineLimit(1).truncationMode(.middle)
+                    Text(item.displayName).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
                 }
+                .contentShape(Rectangle())
+                .folderDropTarget(item, in: here, model: model)
             }
             .width(min: 180, ideal: 320)
             TableColumn("Date Modified", value: \.modified) { item in
@@ -96,7 +112,7 @@ struct ListBrowser: View {
             }
             .width(min: 120, ideal: 170)
             TableColumn("Size", value: \.size) { item in
-                Text(item.isFolder ? "—" : PhoneModel.format(bytes: item.size))
+                Text(item.isFolder ? "—" : AppModel.format(bytes: item.size))
                     .foregroundStyle(.secondary).monospacedDigit()
             }
             .width(min: 60, ideal: 80)
@@ -111,7 +127,7 @@ struct ListBrowser: View {
         }
         .font(.system(size: model.listFontSize))
         .environment(\.defaultMinListRowHeight, iconSize + 6)
-        .contextMenu(forSelectionType: UInt32.self) { ids in
+        .contextMenu(forSelectionType: String.self) { ids in
             ItemMenu(model: model, items: items.filter { ids.contains($0.id) })
         } primaryAction: { ids in
             if ids.count == 1, let item = items.first(where: { ids.contains($0.id) }) { model.open(item) }
@@ -120,24 +136,24 @@ struct ListBrowser: View {
     }
 
     /// The column headers drive the same sort settings as the Sort menu.
-    private var sortOrder: Binding<[KeyPathComparator<PhoneItem>]> {
+    private var sortOrder: Binding<[KeyPathComparator<FileItem>]> {
         Binding(
             get: {
                 let order: SortOrder = model.ascending ? .forward : .reverse
                 switch model.sortKey {
-                case .name: return [KeyPathComparator(\PhoneItem.name, comparator: .localizedStandard, order: order)]
-                case .kind: return [KeyPathComparator(\PhoneItem.kind, comparator: .localizedStandard, order: order)]
-                case .modified: return [KeyPathComparator(\PhoneItem.modified, order: order)]
-                case .size: return [KeyPathComparator(\PhoneItem.size, order: order)]
+                case .name: return [KeyPathComparator(\FileItem.displayName, comparator: .localizedStandard, order: order)]
+                case .kind: return [KeyPathComparator(\FileItem.kind, comparator: .localizedStandard, order: order)]
+                case .modified: return [KeyPathComparator(\FileItem.modified, order: order)]
+                case .size: return [KeyPathComparator(\FileItem.size, order: order)]
                 }
             },
             set: { comparators in
                 guard let first = comparators.first else { return }
                 model.ascending = first.order == .forward
                 switch first.keyPath {
-                case \PhoneItem.kind: model.sortKey = .kind
-                case \PhoneItem.modified: model.sortKey = .modified
-                case \PhoneItem.size: model.sortKey = .size
+                case \FileItem.kind: model.sortKey = .kind
+                case \FileItem.modified: model.sortKey = .modified
+                case \FileItem.size: model.sortKey = .size
                 default: model.sortKey = .name
                 }
             })
@@ -147,42 +163,76 @@ struct ListBrowser: View {
 // MARK: - Icons
 
 struct IconBrowser: View {
-    @ObservedObject var model: PhoneModel
-    @State private var anchor: UInt32?
+    @ObservedObject var model: AppModel
+    @State private var anchor: String?
+    @State private var width: CGFloat = 800
+    @FocusState private var focused: Bool
 
     var body: some View {
-        let items = model.visibleItems
+        let clicks = SelectionClicks(model: model, items: model.visibleItems)
+        let perRow = tilesPerRow
+        grid(clicks)
+            .background(Color(nsColor: .textBackgroundColor))
+            .background(GeometryReader { geo in
+                Color.clear
+                    .onAppear { width = geo.size.width }
+                    .onChange(of: geo.size.width) { width = geo.size.width }
+            })
+            .contentShape(Rectangle())
+            .onTapGesture { focused = true; model.selection = [] }
+            .focusable()
+            .focused($focused)
+            .focusEffectDisabled()
+            .onKeyPress(.leftArrow) { clicks.move(by: -1); return .handled }
+            .onKeyPress(.rightArrow) { clicks.move(by: 1); return .handled }
+            .onKeyPress(.upArrow) { clicks.move(by: -perRow); return .handled }
+            .onKeyPress(.downArrow) { clicks.move(by: perRow); return .handled }
+            .finderKeys(model)
+            .onAppear { focused = true }
+    }
+
+    /// How many tiles fit on a row, so Up/Down move by a whole row as in Finder.
+    private var tilesPerRow: Int {
+        let usable: CGFloat = width - 32 + 10
+        let tile: CGFloat = CGFloat(model.iconSize) + 36 + 10
+        return max(1, Int(usable / tile))
+    }
+
+    private func grid(_ clicks: SelectionClicks) -> some View {
         let size = CGFloat(model.iconSize)
-        let clicks = SelectionClicks(model: model, items: items)
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: size + 36, maximum: size + 60), spacing: 10)], spacing: 14) {
-                ForEach(items) { item in
-                    IconTile(item: item, thumbnail: model.thumbnails[item.id], size: size,
-                             selected: model.selection.contains(item.id))
-                        .onAppear { model.loadThumbnail(for: item) }
-                        .onTapGesture(count: 2) { model.open(item) }
-                        .simultaneousGesture(TapGesture().onEnded { clicks.click(item, anchor: &anchor) })
-                        .contextMenu {
-                            ItemMenu(model: model, items: model.selection.contains(item.id) ? model.selectedItems : [item])
-                        }
-                        .onDrag { model.dragProvider(for: item) }
+        let columns = [GridItem(.adaptive(minimum: size + 36, maximum: size + 60), spacing: 10)]
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 14) {
+                    ForEach(model.visibleItems) { item in
+                        tile(item, size: size, clicks: clicks)
+                    }
                 }
+                .padding(16)
             }
-            .padding(16)
+            .onChange(of: model.selection) {
+                if model.selection.count == 1, let id = model.selection.first { proxy.scrollTo(id) }
+            }
         }
-        .background(Color(nsColor: .textBackgroundColor))
-        .contentShape(Rectangle())
-        .onTapGesture { model.selection = [] }
-        .focusable()
-        .focusEffectDisabled()
-        .onKeyPress(.leftArrow) { clicks.move(by: -1); return .handled }
-        .onKeyPress(.rightArrow) { clicks.move(by: 1); return .handled }
-        .finderKeys(model)
+    }
+
+    private func tile(_ item: FileItem, size: CGFloat, clicks: SelectionClicks) -> some View {
+        IconTile(item: item, thumbnail: model.thumbnails[item.id], size: size,
+                 selected: model.selection.contains(item.id))
+            .folderDropTarget(item, in: model.location, model: model)
+            .id(item.id)
+            .onAppear { model.loadThumbnail(for: item) }
+            .onTapGesture(count: 2) { model.open(item) }
+            .simultaneousGesture(TapGesture().onEnded { focused = true; clicks.click(item, anchor: &anchor) })
+            .contextMenu {
+                ItemMenu(model: model, items: model.selection.contains(item.id) ? model.selectedItems : [item])
+            }
+            .onDrag { model.dragProvider(for: item) }
     }
 }
 
 struct IconTile: View {
-    let item: PhoneItem
+    let item: FileItem
     let thumbnail: NSImage?
     let size: CGFloat
     let selected: Bool
@@ -193,7 +243,7 @@ struct IconTile: View {
                 .padding(4)
                 .background(RoundedRectangle(cornerRadius: 8)
                     .fill(selected ? Color.secondary.opacity(0.25) : Color.clear))
-            Text(item.name)
+            Text(item.displayName)
                 .font(.system(size: size >= 96 ? 12 : 11))
                 .lineLimit(2)
                 .truncationMode(.middle)
@@ -209,101 +259,16 @@ struct IconTile: View {
 
 // MARK: - Columns
 
-struct ColumnBrowser: View {
-    @ObservedObject var model: PhoneModel
-
-    var body: some View {
-        let folders = [MTPDevice.root] + model.path.map(\.id)
-        let selectedFile = model.selectedItems.count == 1 && !model.selectedItems[0].isFolder ? model.selectedItems[0] : nil
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                HStack(spacing: 0) {
-                    ForEach(Array(folders.enumerated()), id: \.element) { index, folder in
-                        FolderColumn(model: model, folder: folder, index: index)
-                            .frame(width: 240)
-                            .id(index)
-                        Divider()
-                    }
-                    if let file = selectedFile {
-                        ColumnPreview(model: model, item: file)
-                            .frame(width: 320)
-                            .id("preview")
-                    }
-                }
-            }
-            .onChange(of: model.path) {
-                withAnimation { proxy.scrollTo(model.path.count, anchor: .trailing) }
-            }
-            .onChange(of: selectedFile?.id) {
-                if selectedFile != nil { withAnimation { proxy.scrollTo("preview", anchor: .trailing) } }
-            }
-        }
-        .task(id: folders) { await model.ensureLoaded(folders) }
-    }
-}
-
-struct FolderColumn: View {
-    @ObservedObject var model: PhoneModel
-    let folder: UInt32
-    let index: Int
-
-    var body: some View {
-        let items = model.visible(folder)
-        let iconSize = model.listIconSize
-        Group {
-            if model.children[folder] == nil {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if items.isEmpty {
-                Text(model.searchText.isEmpty ? "Empty" : "No matches")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(selection: Binding(
-                    get: { highlighted },
-                    set: { id in if let id, let item = items.first(where: { $0.id == id }) { model.columnSelect(item, at: index) } })
-                ) {
-                    ForEach(items) { item in
-                        HStack(spacing: 6) {
-                            ItemIcon(item: item, thumbnail: model.thumbnails[item.id], size: iconSize)
-                                .onAppear { model.loadThumbnail(for: item) }
-                            Text(item.name).lineLimit(1).truncationMode(.middle)
-                            Spacer(minLength: 0)
-                            if item.isFolder {
-                                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                        .font(.system(size: model.listFontSize))
-                        .tag(item.id)
-                        .onDrag { model.dragProvider(for: item) }
-                    }
-                }
-                .listStyle(.plain)
-                .contextMenu(forSelectionType: UInt32.self) { ids in
-                    ItemMenu(model: model, items: items.filter { ids.contains($0.id) })
-                } primaryAction: { ids in
-                    if let item = items.first(where: { ids.contains($0.id) }), !item.isFolder { model.open(item) }
-                }
-                .finderKeys(model)
-            }
-        }
-    }
-
-    /// The folder chosen in this column, or the selected file in the last column.
-    private var highlighted: UInt32? {
-        index < model.path.count ? model.path[index].id : model.selection.first
-    }
-}
-
 struct ColumnPreview: View {
-    @ObservedObject var model: PhoneModel
-    let item: PhoneItem
+    @ObservedObject var model: AppModel
+    let item: FileItem
 
     var body: some View {
         VStack(spacing: 12) {
             PreviewContent(model: model, item: item)
                 .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 320)
-            Text(item.name).font(.headline).multilineTextAlignment(.center).lineLimit(3)
-            Text("\(item.kind) · \(PhoneModel.format(bytes: item.size))").font(.caption).foregroundStyle(.secondary)
+            Text(item.displayName).font(.headline).multilineTextAlignment(.center).lineLimit(3)
+            Text("\(item.kind) · \(AppModel.format(bytes: item.size))").font(.caption).foregroundStyle(.secondary)
             InfoGrid(model: model, item: item)
             Spacer()
         }
@@ -314,11 +279,13 @@ struct ColumnPreview: View {
 // MARK: - Gallery
 
 struct GalleryBrowser: View {
-    @ObservedObject var model: PhoneModel
-    @State private var anchor: UInt32?
+    @ObservedObject var model: AppModel
+    @State private var anchor: String?
+    @FocusState private var focused: Bool
 
     var body: some View {
         let items = model.visibleItems
+        let here = model.location
         let clicks = SelectionClicks(model: model, items: items)
         let current = model.selectedItems.first ?? items.first
         VStack(spacing: 0) {
@@ -334,8 +301,8 @@ struct GalleryBrowser: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let current {
-                Text(current.name).font(.headline).lineLimit(1).truncationMode(.middle).padding(.bottom, 2)
-                Text("\(current.kind) · \(current.isFolder ? "Folder" : PhoneModel.format(bytes: current.size))")
+                Text(current.displayName).font(.headline).lineLimit(1).truncationMode(.middle).padding(.bottom, 2)
+                Text("\(current.kind) · \(current.isFolder ? "Folder" : AppModel.format(bytes: current.size))")
                     .font(.caption).foregroundStyle(.secondary).padding(.bottom, 8)
             }
             Divider()
@@ -347,15 +314,16 @@ struct GalleryBrowser: View {
                                 .padding(3)
                                 .overlay(RoundedRectangle(cornerRadius: 6)
                                     .strokeBorder(item.id == current?.id ? Color.accentColor : .clear, lineWidth: 3))
+                                .folderDropTarget(item, in: here, model: model)
                                 .id(item.id)
                                 .onAppear { model.loadThumbnail(for: item) }
                                 .onTapGesture(count: 2) { model.open(item) }
-                                .simultaneousGesture(TapGesture().onEnded { clicks.click(item, anchor: &anchor) })
+                                .simultaneousGesture(TapGesture().onEnded { focused = true; clicks.click(item, anchor: &anchor) })
                                 .contextMenu {
                                     ItemMenu(model: model, items: model.selection.contains(item.id) ? model.selectedItems : [item])
                                 }
                                 .onDrag { model.dragProvider(for: item) }
-                                .help(item.name)
+                                .help(item.displayName)
                         }
                     }
                     .padding(10)
@@ -366,10 +334,16 @@ struct GalleryBrowser: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .focusable()
+        .focused($focused)
         .focusEffectDisabled()
         .onKeyPress(.leftArrow) { clicks.move(by: -1); return .handled }
         .onKeyPress(.rightArrow) { clicks.move(by: 1); return .handled }
+        .onKeyPress(.upArrow) { clicks.move(by: -1); return .handled }
+        .onKeyPress(.downArrow) { clicks.move(by: 1); return .handled }
         .finderKeys(model)
-        .onAppear { if model.selection.isEmpty, let first = items.first { model.selection = [first.id] } }
+        .onAppear {
+            focused = true
+            if model.selection.isEmpty, let first = items.first { model.selection = [first.id] }
+        }
     }
 }

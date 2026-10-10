@@ -224,6 +224,14 @@ final class MTPDevice {
         guard LIBMTP_Set_Object_Filename(dev, id, cName) == 0 else { throw errors("Could not rename to “\(name)”.") }
     }
 
+    /// Moves an object to another folder on the phone without copying it.
+    func move(_ id: UInt32, storage: UInt32, parent: UInt32) throws {
+        let dev = try require()
+        guard LIBMTP_Move_Object(dev, id, storage, parent == Self.root ? 0 : parent) == 0 else {
+            throw errors("The phone could not move this item.")
+        }
+    }
+
     func delete(_ id: UInt32) throws {
         let dev = try require()
         guard LIBMTP_Delete_Object(dev, id) == 0 else { throw errors("Delete failed.") }

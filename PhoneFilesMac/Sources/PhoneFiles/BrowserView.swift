@@ -3,60 +3,53 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct BrowserView: View {
-    @ObservedObject var model: PhoneModel
-    @State private var dropTargeted = false
+    @ObservedObject var model: AppModel
 
     var body: some View {
+        let contentDropID = "content"
         VStack(spacing: 0) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay { if dropTargeted { DropOverlay() } }
-                .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
-                    Self.loadFileURLs(providers) { model.upload($0) }
-                    return model.storageID != nil
+                .overlay {
+                    if model.dropTargetID == contentDropID { DropOverlay(title: "Drop to put here: \(model.currentTitle)") }
                 }
+                .onDrop(of: [.phoneFilesItem, .fileURL],
+                        delegate: FolderDrop(model: model, destination: model.location, targetID: contentDropID))
             Divider()
             PathBar(model: model)
             Divider()
             StatusBar(model: model)
         }
-        .navigationTitle(model.path.last?.name ?? model.currentStorage?.name ?? "Phone Files")
+        .navigationTitle(model.currentTitle)
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search this folder")
         .toolbar { BrowserToolbar(model: model) }
-        .onPasteCommand(of: [.fileURL]) { providers in
-            Self.loadFileURLs(providers) { model.upload($0) }
-        }
     }
 
     @ViewBuilder
     private var content: some View {
-        if model.connection == .connecting {
-            ProgressView("Connecting to phone…")
-        } else if case .failed(let message) = model.connection {
+        if model.location.isPhone, let phoneState = phoneStateView {
+            phoneState
+        } else if let error = model.currentError {
             ContentUnavailableView {
-                Label("Phone not connected", systemImage: "cable.connector.slash")
-            } description: {
-                Text(message)
-            } actions: {
-                Button("Connect") { Task { await model.connect() } }.buttonStyle(.borderedProminent)
-            }
-        } else if let error = model.folderError {
-            ContentUnavailableView {
-                Label("Can’t read this folder", systemImage: "lock")
+                Label("Can’t open this folder", systemImage: "lock")
             } description: {
                 Text(error)
             } actions: {
                 Button("Try Again") { Task { await model.refresh() } }
-                Button("Reconnect") { Task { await model.connect() } }.buttonStyle(.borderedProminent)
+                if !model.location.isPhone {
+                    Button("Open Privacy Settings") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
+                    }
+                }
             }
         } else if model.viewMode == .columns {
-            ColumnBrowser(model: model)  // columns show their own loading and empty states
+            FinderColumnView(model: model)  // the native column browser handles its own states
         } else if !model.hasListing {
             ProgressView()
         } else if model.visibleItems.isEmpty {
             if model.searchText.isEmpty {
                 ContentUnavailableView("Empty Folder", systemImage: "folder",
-                                       description: Text("Drop files here to copy them to the phone."))
+                                       description: Text("Drag files here to put them in this folder."))
             } else {
                 ContentUnavailableView.search(text: model.searchText)
             }
@@ -70,23 +63,34 @@ struct BrowserView: View {
         }
     }
 
-    static func loadFileURLs(_ providers: [NSItemProvider], then handle: @escaping ([URL]) -> Void) {
-        let group = DispatchGroup()
-        let lock = NSLock()
-        var urls: [URL] = []
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            group.enter()
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                if let url { lock.withLock { urls.append(url) } }
-                group.leave()
-            }
+    /// What to show instead of a phone folder while the phone isn't usable.
+    private var phoneStateView: AnyView? {
+        switch model.connection {
+        case .idle, .connecting:
+            return AnyView(ProgressView("Connecting to \(model.phoneName)…"))
+        case .failed(let message):
+            return AnyView(ContentUnavailableView {
+                Label("Phone not connected", systemImage: "cable.connector.slash")
+            } description: {
+                Text(message)
+            } actions: {
+                Button("Connect") { Task { await model.connectPhone() } }.buttonStyle(.borderedProminent)
+            })
+        case .connected:
+            guard model.storages.isEmpty else { return nil }
+            return AnyView(ContentUnavailableView {
+                Label("Phone is locked", systemImage: "lock")
+            } description: {
+                Text(model.storageError ?? "Unlock the phone to see its files.")
+            } actions: {
+                Button("Try Again") { Task { await model.connectPhone() } }.buttonStyle(.borderedProminent)
+            })
         }
-        group.notify(queue: .main) { if !urls.isEmpty { handle(urls) } }
     }
 }
 
 struct BrowserToolbar: ToolbarContent {
-    @ObservedObject var model: PhoneModel
+    @ObservedObject var model: AppModel
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
@@ -131,23 +135,14 @@ struct BrowserToolbar: ToolbarContent {
                 ItemMenu(model: model, items: model.selectedItems)
                 Divider()
                 Button("New Folder") { model.askNewFolder = true }
-                Button("Upload to Phone…") { model.pickUploads() }
+                Button("Copy Files Here…") { model.pickFilesToCopyHere() }
+                if model.canPaste { Button("Paste") { model.paste(move: false) } }
                 Divider()
-                Button("Reconnect Phone") { Task { await model.connect() } }
+                Button("Reconnect Phone") { Task { await model.connectPhone() } }
             } label: {
                 Label("Actions", systemImage: "ellipsis.circle")
             }
             .help("Perform tasks with the selected items")
-        }
-        ToolbarItem(placement: .primaryAction) {
-            Button { model.pickUploads() } label: { Label("Upload", systemImage: "square.and.arrow.up") }
-                .help("Copy files from this Mac to the phone")
-                .disabled(model.storageID == nil)
-        }
-        ToolbarItem(placement: .primaryAction) {
-            Button { model.downloadSelection() } label: { Label("Download", systemImage: "square.and.arrow.down") }
-                .help("Copy the selection to your Downloads folder")
-                .disabled(model.selection.isEmpty)
         }
         ToolbarItem(placement: .primaryAction) {
             Button { model.showPreviewPane.toggle() } label: { Label("Preview", systemImage: "sidebar.right") }
@@ -158,8 +153,8 @@ struct BrowserToolbar: ToolbarContent {
 
 /// The right-click menu, shared by every view and the toolbar's Actions menu.
 struct ItemMenu: View {
-    let model: PhoneModel
-    let items: [PhoneItem]
+    let model: AppModel
+    let items: [FileItem]
 
     var body: some View {
         if items.count == 1 {
@@ -170,27 +165,41 @@ struct ItemMenu: View {
             Divider()
         }
         if !items.isEmpty {
-            Button("Download to Downloads") { model.download(items, to: PhoneModel.downloadsFolder) }
-            Button("Download To…") {
-                model.selection = Set(items.map(\.id))
-                model.downloadSelectionTo()
+            Button("Copy") { model.copyToClipboard(items) }
+            if items.contains(where: \.isPhone) {
+                Button("Copy to Downloads") { model.transfer(items, to: .mac(AppModel.downloadsFolder), move: false) }
+            }
+            Button("Copy To…") { model.copy(items, toChosenFolder: true) }
+            if let url = items.first?.macURL, items.count == 1 {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             }
             Divider()
-            Button("Delete…", role: .destructive) { model.pendingDelete = items }
+            Button(items.contains(where: \.isPhone) ? "Delete…" : "Move to Trash", role: .destructive) {
+                model.beginDelete(items)
+            }
         }
     }
 }
 
 struct PathBar: View {
-    @ObservedObject var model: PhoneModel
+    @ObservedObject var model: AppModel
 
     var body: some View {
+        let crumbs = model.breadcrumbs
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                crumb(model.currentStorage?.name ?? "Phone", systemImage: "internaldrive", depth: -1)
-                ForEach(Array(model.path.enumerated()), id: \.element.id) { index, folder in
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                    crumb(folder.name, systemImage: "folder.fill", depth: index)
+                ForEach(Array(crumbs.enumerated()), id: \.offset) { index, crumb in
+                    if index > 0 { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary) }
+                    Button { model.navigate(to: crumb.location) } label: {
+                        HStack(spacing: 4) {
+                            crumbIcon(crumb.location, isRoot: index == 0)
+                            Text(crumb.title).lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(index == crumbs.count - 1 ? .primary : .secondary)
+                    .onDrop(of: [.phoneFilesItem, .fileURL],
+                            delegate: FolderDrop(model: model, destination: crumb.location, targetID: "crumb:\(index)"))
                 }
             }
             .padding(.horizontal, 10)
@@ -199,17 +208,18 @@ struct PathBar: View {
         .font(.caption)
     }
 
-    private func crumb(_ title: String, systemImage: String, depth: Int) -> some View {
-        Button { model.goTo(depth: depth) } label: {
-            Label(title, systemImage: systemImage).lineLimit(1)
+    @ViewBuilder
+    private func crumbIcon(_ location: Location, isRoot: Bool) -> some View {
+        if let url = location.macURL {
+            Image(nsImage: Icons.icon(forPath: url.path)).resizable().frame(width: 14, height: 14)
+        } else {
+            Image(systemName: isRoot ? "smartphone" : "folder.fill")
         }
-        .buttonStyle(.borderless)
-        .foregroundStyle(depth == model.path.count - 1 ? .primary : .secondary)
     }
 }
 
 struct StatusBar: View {
-    @ObservedObject var model: PhoneModel
+    @ObservedObject var model: AppModel
 
     // The bar must never demand width: when the window is narrow and the preview pane is open,
     // a bar wider than the space left made the split view re-solve its layout forever (crash).
@@ -243,12 +253,12 @@ struct StatusBar: View {
         let count = model.visibleItems.count
         var text = "\(count) item\(count == 1 ? "" : "s")"
         if !model.selection.isEmpty { text = "\(model.selection.count) of \(count) selected" }
-        if let free = model.currentStorage?.free { text += ", \(PhoneModel.format(bytes: free)) available" }
+        if let free = model.availableSpace { text += ", \(AppModel.format(bytes: free)) available" }
         return text
     }
 }
 
-/// Finder's icon-size slider. Drawn in SwiftUI: a native slider placed in this bar sends
+/// Finder's icon-size slider. Drawn in SwiftUI: a native slider placed in this bar sent
 /// AppKit into an endless constraint pass inside the split view (it crashed the app).
 struct IconSizeControl: View {
     @Binding var size: Double
@@ -286,12 +296,13 @@ struct IconSizeControl: View {
 }
 
 struct DropOverlay: View {
+    let title: String
+
     var body: some View {
         RoundedRectangle(cornerRadius: 12)
             .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.08)))
-            .overlay(Label("Drop to copy to the phone", systemImage: "square.and.arrow.down.on.square")
-                .font(.title3))
+            .overlay(Label(title, systemImage: "square.and.arrow.down.on.square").font(.title3).padding())
             .padding(10)
             .allowsHitTesting(false)
     }

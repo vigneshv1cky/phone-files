@@ -19,22 +19,27 @@ struct QuickLookView: NSViewRepresentable {
         if (view.previewItem as? NSURL) as URL? != url { view.previewItem = url as NSURL }
     }
 
+    // No explicit close() here: switching views can tear a preview down before Quick Look has
+    // finished activating it, and closing it then trips a Quick Look assertion (crash). Clearing
+    // the item releases the file; the view closes with the window.
     static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) {
-        view.close()
+        view.previewItem = nil
     }
 }
 
-/// Preview of one item for the preview pane, gallery and column view. Small files load
-/// automatically; large ones show their thumbnail and a button, so a 2 GB video isn't
-/// copied off the phone just because it was selected.
+/// Preview of one item for the preview pane, gallery and column view. Mac files preview
+/// directly. Small phone files load automatically; large ones show their thumbnail and a
+/// button, so a 2 GB video isn't copied off the phone just because it was selected.
 struct PreviewContent: View {
-    @ObservedObject var model: PhoneModel
-    let item: PhoneItem
+    @ObservedObject var model: AppModel
+    let item: FileItem
 
     var body: some View {
         Group {
             if item.isFolder {
                 bigIcon
+            } else if let url = item.macURL {
+                QuickLookView(url: url)
             } else if let load = model.previews[item.id] {
                 LoadedPreview(load: load, placeholder: bigIcon) { model.requestPreview(item, force: true) }
             } else {
@@ -54,10 +59,8 @@ struct PreviewContent: View {
                 if let thumb = model.thumbnails[item.id] {
                     Image(nsImage: thumb).resizable().scaledToFit()
                 } else {
-                    Image(systemName: FileKind(item).symbol)
-                        .resizable().scaledToFit()
-                        .frame(width: side * 0.45, height: side * 0.45)
-                        .foregroundStyle(item.isFolder ? Color.accentColor : .secondary)
+                    Image(nsImage: Icons.icon(for: item)).resizable().scaledToFit()
+                        .frame(width: side * 0.6, height: side * 0.6)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -86,7 +89,7 @@ private struct LoadedPreview<Placeholder: View>: View {
         case .idle:
             placeholder
                 .overlay(alignment: .bottom) {
-                    Button("Load Preview (\(PhoneModel.format(bytes: load.item.size)))", action: loadNow)
+                    Button("Load Preview (\(AppModel.format(bytes: load.item.size)))", action: loadNow)
                         .padding(10)
                 }
         case .failed(let message):
@@ -97,7 +100,7 @@ private struct LoadedPreview<Placeholder: View>: View {
 
 /// Finder's preview pane: a large preview plus the item's details and quick actions.
 struct PreviewPane: View {
-    @ObservedObject var model: PhoneModel
+    @ObservedObject var model: AppModel
 
     var body: some View {
         let selected = model.selectedItems
@@ -115,68 +118,79 @@ struct PreviewPane: View {
         }
     }
 
-    private func single(_ item: PhoneItem) -> some View {
+    private func single(_ item: FileItem) -> some View {
         VStack(spacing: 12) {
             PreviewContent(model: model, item: item)
                 .frame(height: 280)
                 .frame(maxWidth: .infinity)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
-            Text(item.name).font(.headline).multilineTextAlignment(.center).lineLimit(3)
-            Text(item.isFolder ? "Folder" : "\(item.kind) · \(PhoneModel.format(bytes: item.size))")
+            Text(item.displayName).font(.headline).multilineTextAlignment(.center).lineLimit(3)
+            Text(item.isFolder ? "Folder" : "\(item.kind) · \(AppModel.format(bytes: item.size))")
                 .font(.caption).foregroundStyle(.secondary)
             InfoGrid(model: model, item: item)
             HStack {
-                Button(item.isFolder ? "Open" : "Open") { model.open(item) }
+                Button("Open") { model.open(item) }
                 if !item.isFolder { Button("Quick Look") { model.quickLook(item) } }
-                Button("Download") { model.download([item], to: PhoneModel.downloadsFolder) }
+                if item.isPhone {
+                    Button("Copy to Downloads") { model.transfer([item], to: .mac(AppModel.downloadsFolder), move: false) }
+                }
             }
             .controlSize(.small)
         }
     }
 
-    private func multiple(_ items: [PhoneItem]) -> some View {
+    private func multiple(_ items: [FileItem]) -> some View {
         VStack(spacing: 10) {
             Image(systemName: "doc.on.doc").font(.system(size: 56)).foregroundStyle(.secondary).padding(.top, 30)
             Text("\(items.count) items").font(.headline)
             let files = items.filter { !$0.isFolder }
-            Text("\(PhoneModel.format(bytes: files.reduce(0) { $0 + $1.size })) in \(files.count) file\(files.count == 1 ? "" : "s")"
+            Text("\(AppModel.format(bytes: files.reduce(0) { $0 + $1.size })) in \(files.count) file\(files.count == 1 ? "" : "s")"
                  + (files.count < items.count ? ", plus \(items.count - files.count) folder\(items.count - files.count == 1 ? "" : "s")" : ""))
                 .font(.caption).foregroundStyle(.secondary)
-            Button("Download All") { model.download(items, to: PhoneModel.downloadsFolder) }.controlSize(.small)
+            if items.contains(where: \.isPhone) {
+                Button("Copy All to Downloads") { model.transfer(items, to: .mac(AppModel.downloadsFolder), move: false) }
+                    .controlSize(.small)
+            }
         }
     }
 
     private var folderSummary: some View {
         VStack(spacing: 10) {
-            Image(systemName: model.path.isEmpty ? "internaldrive" : "folder.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(Color.accentColor)
-                .padding(.top, 30)
-            Text(model.path.last?.name ?? model.currentStorage?.name ?? "Phone").font(.headline)
+            Group {
+                if let url = model.location.macURL {
+                    Image(nsImage: Icons.icon(forPath: url.path)).resizable().scaledToFit()
+                } else {
+                    Image(systemName: "smartphone").resizable().scaledToFit().foregroundStyle(Color.accentColor)
+                }
+            }
+            .frame(width: 72, height: 72)
+            .padding(.top, 30)
+            Text(model.currentTitle).font(.headline)
             let items = model.visibleItems
-            Text("\(items.count) items · \(PhoneModel.format(bytes: items.filter { !$0.isFolder }.reduce(0) { $0 + $1.size })) in files")
+            Text("\(items.count) items · \(AppModel.format(bytes: items.filter { !$0.isFolder }.reduce(0) { $0 + $1.size })) in files")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Select an item to preview it.").font(.caption).foregroundStyle(.tertiary)
         }
     }
 }
 
-/// The Information section: kind, size, date, dimensions and where it lives on the phone.
+/// The Information section: kind, size, date, dimensions and where the item lives.
 struct InfoGrid: View {
-    @ObservedObject var model: PhoneModel
-    let item: PhoneItem
+    @ObservedObject var model: AppModel
+    let item: FileItem
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
             row("Kind", item.kind)
-            if !item.isFolder { row("Size", "\(PhoneModel.format(bytes: item.size)) (\(item.size.formatted()) bytes)") }
+            if !item.isFolder { row("Size", "\(AppModel.format(bytes: item.size)) (\(item.size.formatted()) bytes)") }
             if item.modified.timeIntervalSince1970 > 0 {
                 row("Modified", item.modified.formatted(date: .long, time: .shortened))
             }
-            if let size = model.previews[item.id]?.dimensions {
+            if let size = model.dimensions(of: item) {
                 row("Dimensions", "\(Int(size.width)) × \(Int(size.height))")
             }
-            row("Where", model.locationDescription)
+            row("Where", item.macURL?.deletingLastPathComponent().path
+                ?? model.breadcrumbs.map(\.title).joined(separator: " › "))
         }
         .font(.caption)
         .frame(maxWidth: .infinity, alignment: .leading)

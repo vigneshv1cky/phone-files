@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var model: PhoneModel?
+    var model: AppModel?
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct PhoneFilesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = PhoneModel()
+    @StateObject private var model = AppModel()
 
     var body: some Scene {
         Window("Phone Files", id: "main") {
@@ -43,21 +43,26 @@ struct PhoneFilesApp: App {
                 .onAppear { delegate.model = model }
         }
         .defaultSize(width: 1240, height: 780)
-        .commands { PhoneCommands(model: model) }
+        .commands { AppCommands(model: model) }
     }
 }
 
-struct PhoneCommands: Commands {
-    @ObservedObject var model: PhoneModel
+struct AppCommands: Commands {
+    @ObservedObject var model: AppModel
+
+    /// While typing (search box, rename field) Edit commands act on the text, as usual.
+    private var editingText: Bool { NSApp.keyWindow?.firstResponder is NSText }
+
+    private func textAction(_ selector: Selector) {
+        NSApp.sendAction(selector, to: nil, from: nil)
+    }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Folder") { model.askNewFolder = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(model.storageID == nil)
-            Button("Upload to Phone…") { model.pickUploads() }
+            Button("Copy Files Here…") { model.pickFilesToCopyHere() }
                 .keyboardShortcut("u")
-                .disabled(model.storageID == nil)
             Divider()
             Button("Open") { model.openSelection() }
                 .keyboardShortcut(.downArrow, modifiers: .command)
@@ -70,18 +75,31 @@ struct PhoneCommands: Commands {
             Button("Rename…") { model.beginRename() }
                 .disabled(model.selection.count != 1)
             Divider()
-            Button("Download to Downloads") { model.downloadSelection() }
+            Button("Copy to Downloads") { model.copySelection(toChosenFolder: false) }
                 .keyboardShortcut("d")
                 .disabled(model.selection.isEmpty)
-            Button("Download To…") { model.downloadSelectionTo() }
+            Button("Copy To…") { model.copySelection(toChosenFolder: true) }
                 .disabled(model.selection.isEmpty)
             Divider()
-            Button("Delete…") { model.beginDelete() }
+            Button(model.selectedItems.contains(where: \.isPhone) ? "Delete…" : "Move to Trash") { model.beginDelete() }
                 .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(model.selection.isEmpty)
             Divider()
-            Button("Reconnect Phone") { Task { await model.connect() } }
+            Button("Reconnect Phone") { Task { await model.connectPhone() } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
+        }
+
+        CommandGroup(replacing: .pasteboard) {
+            Button("Cut") { textAction(#selector(NSText.cut(_:))) }
+                .keyboardShortcut("x")
+            Button("Copy") { editingText ? textAction(#selector(NSText.copy(_:))) : model.copySelectionToClipboard() }
+                .keyboardShortcut("c")
+            Button("Paste") { editingText ? textAction(#selector(NSText.paste(_:))) : model.paste(move: false) }
+                .keyboardShortcut("v")
+            Button("Move Item Here") { model.paste(move: true) }
+                .keyboardShortcut("v", modifiers: [.command, .option])
+            Button("Select All") { editingText ? textAction(#selector(NSText.selectAll(_:))) : model.selectAll() }
+                .keyboardShortcut("a")
         }
 
         CommandGroup(before: .sidebar) {
@@ -119,11 +137,17 @@ struct PhoneCommands: Commands {
                 .disabled(!model.canGoForward)
             Button("Enclosing Folder") { model.goUp() }
                 .keyboardShortcut(.upArrow, modifiers: .command)
-                .disabled(model.path.isEmpty)
+                .disabled(!model.canGoUp)
             Divider()
-            Button("Top Level") { model.navigate(to: []) }
-            ForEach(model.favorites) { folder in
-                Button(folder.name) { model.navigate(to: [folder]) }
+            ForEach(AppModel.macFavorites) { place in
+                Button(place.title) { model.open(.mac(place.url)) }
+            }
+            if let storage = model.storages.first {
+                Divider()
+                Button(model.phoneName) { model.open(.phone(storage: storage.id)) }
+                ForEach(model.phoneFavorites) { folder in
+                    Button(folder.name) { model.open(.phoneFolder(folder)) }
+                }
             }
         }
     }
