@@ -31,6 +31,10 @@ earlier Python/browser prototype; `PhoneFilesMac/` is the app that ships.
 - Drag from Finder: drops work when delivered (tested via both drop paths), but a real Finder drag hasn't been confirmed; every drop step now logs "Drop:" lines at notice level to show where a real one stops.
 - After a replug a Pixel often falls back to "No data transfer": it still enumerates as MTP (PID 0x4ee1) but hides storage ("Get Storage information failed"). The fix is on the phone: choose File transfer again.
 
+## Pick up here next time (2026-10-10)
+- Finder → app drag: user reported it doesn't work; ask which view and drop target, then read the "Drop:" notice lines in the log.
+- The phone has a test folder from the write test: Download/Phone Files Test (notes.txt + one photo copy). User hasn't decided whether to delete it.
+
 ## Phone-side requirements
 - USB mode must be "File transfer / Android Auto"; storage is hidden while the screen is locked.
 - Developer options → "Stay awake" keeps the session alive while plugged in.
